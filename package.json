@@ -1,0 +1,10 @@
+{
+  "name": "cocoindex-code",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OMP extension host for cocoindex-code (ccc index hooks).",
+  "license": "Apache-2.0",
+  "omp": {
+    "extensions": ["./extensions/ccc-index.ts"]
+  }
+}

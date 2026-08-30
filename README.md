@@ -97,7 +97,7 @@ For [Grok](https://github.com/xai-org/grok) users, install via Grok's plugin sys
 | Component | Purpose |
 |-----------|---------|
 | **Skill** (`skills/ccc/`) | Agent runs `ccc search` / `ccc index` via the CLI (same as Claude Code above) |
-| **Hook** (`hooks/hooks.json`) | `SessionStart` → incremental `ccc index` when `.cocoindex_code/` exists |
+| **Hook** (`hooks/hooks.json`) | `SessionStart` + `PostToolUse` (Edit/Write/…) → incremental `ccc index` when `.cocoindex_code/` exists |
 | **MCP** (`.mcp.json`) | `ccc mcp` stdio server — `search` tool with `refresh_index=true` by default |
 
 Grok does **not** import Claude's `enabledPlugins` or plugin cache; install separately even if you already use cocoindex in Claude Code.
@@ -118,7 +118,7 @@ Prefer the GitHub shorthand (`cocoindex-io/cocoindex-code`) for install — `gro
 
 Install and enable as above, then disable the optional components:
 
-1. **Hooks** — open `/hooks`, select the `SessionStart` hook from `cocoindex-code`, press `Space` to disable.
+1. **Hooks** — open `/hooks`, select the `SessionStart` / `PostToolUse` hooks from `cocoindex-code`, press `Space` to disable.
 2. **MCP** — open `/mcps`, select `cocoindex-code`, press `Space` to disable; or persist in `~/.grok/config.toml`:
 
 ```toml
@@ -147,9 +147,17 @@ omp plugin marketplace add cocoindex-io/cocoindex-code
 omp plugin install cocoindex-code@cocoindex-code --scope project
 ```
 
-Then `/reload-plugins` (or restart the session). The plugin loads the `ccc` skill and the bundled MCP server (`ccc mcp`). Requires `ccc` on `PATH` (`uv tool install --upgrade 'cocoindex-code[full]'`).
+Then restart the session (`/reload-plugins` does not reload extensions). Requires `ccc` on `PATH` (`uv tool install --upgrade 'cocoindex-code[full]'`).
 
-Skill-only (no MCP): install the skill via `npx skills add cocoindex-io/cocoindex-code`, or run `ccc search` / `ccc index` from the shell.
+| Component | Purpose |
+|-----------|---------|
+| **Skill** (`skills/ccc/`) | Agent runs `ccc search` / `ccc index` via the CLI |
+| **Hook** (`extensions/ccc-index.ts` via `package.json#omp.extensions`) | `session_start` + post-edit `tool_result` → incremental `ccc index` when `.cocoindex_code/` exists |
+| **MCP** (`.mcp.json`) | `ccc mcp` stdio server |
+
+OMP does **not** execute Claude `hooks/hooks.json` command hooks. The TypeScript extension is the OMP equivalent of the Claude/Grok SessionStart + PostToolUse pair.
+
+Skill-only (no MCP, no auto-index): install the skill via `npx skills add cocoindex-io/cocoindex-code`, or run `ccc search` / `ccc index` from the shell.
 
 ### MCP Server
 

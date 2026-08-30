@@ -6,7 +6,19 @@
           {
             "type": "command",
             "timeout": 60,
-            "command": "command -v ccc >/dev/null && test -d \"${CLAUDE_PROJECT_DIR}/.cocoindex_code\" && (cd \"${CLAUDE_PROJECT_DIR}\" && ccc index) 2>/dev/null || true"
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-${GROK_WORKSPACE_ROOT:-}}\"; [ -z \"$root\" ] && root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; command -v ccc >/dev/null && test -d \"$root/.cocoindex_code\" && (cd \"$root\" && ccc index) 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|search_replace",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 30,
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-${GROK_WORKSPACE_ROOT:-}}\"; [ -z \"$root\" ] && root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; command -v ccc >/dev/null && test -d \"$root/.cocoindex_code\" && (cd \"$root\" && ccc index) 2>/dev/null || true"
           }
         ]
       }

@@ -10,7 +10,7 @@
     {
       "name": "cocoindex-code",
       "source": "./",
-      "description": "Semantic code search — ccc skill and MCP server (`ccc mcp`). Claude/Grok also ship an optional SessionStart index hook.",
+      "description": "Semantic code search — ccc skill, MCP server (`ccc mcp`), and index hooks (session start + post-edit).",
       "category": "development",
       "tags": [
         "semantic-search",
