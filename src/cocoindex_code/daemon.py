@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 import logging
 import os
@@ -11,10 +12,12 @@ import sys
 import threading
 import time
 import traceback
+import weakref
 from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
 from multiprocessing.connection import Client, Connection, Listener
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 from ._daemon_paths import (
@@ -27,7 +30,7 @@ from ._daemon_paths import (
     write_last_exit_marker,
 )
 from ._version import __version__
-from .chunking import ChunkerFn as _ChunkerFn
+from .chunking import LoadedChunker
 from .embedder_params import resolve_embedder_params
 from .project import Project
 from .protocol import (
@@ -99,22 +102,41 @@ def _build_backward_compat_warning(
     )
 
 
-def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> dict[str, _ChunkerFn]:
-    """Resolve ``ChunkerMapping`` settings entries to a ``{suffix: fn}`` dict.
+# sha256 of each chunker module's file, taken when the daemon first got the module.
+# importlib returns the already loaded module on later imports (another project, or
+# the same one after `ccc reset`), and that module still runs the code that was
+# loaded, whatever the file holds now.
+_chunker_module_sha256: weakref.WeakKeyDictionary[ModuleType, str] = weakref.WeakKeyDictionary()
+
+
+def _module_sha256(mod: ModuleType) -> str:
+    digest = _chunker_module_sha256.get(mod)
+    if digest is None:
+        # Builtin modules have no file; their code only changes with Python itself.
+        file = getattr(mod, "__file__", None)
+        digest = hashlib.sha256(Path(file).read_bytes()).hexdigest() if file else ""
+        _chunker_module_sha256[mod] = digest
+    return digest
+
+
+def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> dict[str, LoadedChunker]:
+    """Import the chunkers from ``ChunkerMapping`` settings entries, keyed by suffix.
 
     Each ``mapping.module`` must be a ``"module.path:callable"`` string importable
-    from the current environment.
+    from the current environment. Each chunker records that string and a hash of
+    the module file it names, which is what makes a chunker edit re-process files.
     """
-    registry: dict[str, _ChunkerFn] = {}
+    registry: dict[str, LoadedChunker] = {}
     for cm in mappings:
         module_path, _, attr = cm.module.partition(":")
         if not attr:
             raise ValueError(f"chunker module {cm.module!r} must use 'module.path:callable' format")
         mod = importlib.import_module(module_path)
+        module_sha256 = _module_sha256(mod)
         fn = getattr(mod, attr)
         if not callable(fn):
             raise ValueError(f"chunker {cm.module!r}: {attr!r} is not callable")
-        registry[f".{cm.ext}"] = fn
+        registry[f".{cm.ext}"] = LoadedChunker(fn, spec=cm.module, module_sha256=module_sha256)
     return registry
 
 
@@ -161,13 +183,12 @@ class ProjectRegistry:
         if project_root not in self._projects:
             root = Path(project_root)
             project_settings = load_project_settings(root)
-            chunker_registry = _resolve_chunker_registry(project_settings.chunkers)
             project = await Project.create(
                 root,
                 self._embedder,
                 indexing_params=self.indexing_params,
                 query_params=self.query_params,
-                chunker_registry=chunker_registry,
+                chunker_registry=_resolve_chunker_registry(project_settings.chunkers),
                 clear_mps_cache_after_index=self._clear_mps_cache_after_index,
             )
             self._projects[project_root] = project
@@ -856,7 +877,10 @@ def run_daemon(
         if sys.platform != "win32":
             try:
                 current_st = Path(sock_path).stat()
-                if bound_sock_stat is not None and (current_st.st_dev, current_st.st_ino) == bound_sock_stat:
+                if (
+                    bound_sock_stat is not None
+                    and (current_st.st_dev, current_st.st_ino) == bound_sock_stat
+                ):
                     Path(sock_path).unlink(missing_ok=True)
             except Exception:
                 pass

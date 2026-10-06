@@ -5,14 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 import cocoindex as coco
 from cocoindex.connectors import sqlite as coco_sqlite
 
-from .chunking import CHUNKER_REGISTRY, ChunkerFn
+from .chunking import CHUNKER_REGISTRY, LoadedChunker
 from .indexer import indexer_main
 from .protocol import (
     IndexingProgress,
@@ -281,7 +281,7 @@ class Project:
         embedder: Embedder,
         indexing_params: dict[str, Any],
         query_params: dict[str, Any],
-        chunker_registry: dict[str, ChunkerFn] | None = None,
+        chunker_registry: Mapping[str, LoadedChunker] | None = None,
         clear_mps_cache_after_index: bool = False,
     ) -> Project:
         """Create a project with explicit embedder and per-call params.
@@ -299,7 +299,7 @@ class Project:
             query_params: Extra kwargs spread into ``embedder.embed()`` for the
                 query side.
             chunker_registry: Optional mapping of file suffix (e.g. ``".toml"``)
-                to a ``ChunkerFn``. When a suffix matches, the registered
+                to a ``LoadedChunker``. When a suffix matches, the registered
                 chunker is called instead of the built-in splitter.
             clear_mps_cache_after_index: Whether to release unused MPS allocator
                 memory in CocoIndex's GPU subprocess after each index run.
