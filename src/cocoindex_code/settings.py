@@ -354,6 +354,54 @@ def project_settings_path(project_root: Path) -> Path:
     return project_root / _SETTINGS_DIR_NAME / _SETTINGS_FILE_NAME
 
 
+def is_user_settings_root(directory: Path) -> bool:
+    """Return whether *directory*'s ``.cocoindex_code`` is the user settings dir.
+
+    That is ``$HOME`` by default, ``/x`` with ``COCOINDEX_CODE_DIR=/x/.cocoindex_code``
+    (the Docker image's layout), and no directory with ``COCOINDEX_CODE_DIR=/x/ccc``.
+    A project there covers every directory below it, so ccc never creates one
+    automatically; ``ccc init`` run there by hand still does.
+    """
+    return (directory / _SETTINGS_DIR_NAME).resolve() == user_settings_dir().resolve()
+
+
+def auto_init_refusal(directory: Path) -> str | None:
+    """Return why *directory* must not be initialized automatically, or ``None``."""
+    if not is_user_settings_root(directory):
+        return None
+    shown = format_path_for_display(directory)
+    return (
+        f"{shown} has no project settings, and ccc does not create them there"
+        f" automatically: its {_SETTINGS_DIR_NAME} directory is ccc's user settings"
+        " directory, so a project there would cover every directory below it."
+        " Run ccc from inside a project instead. To index all of"
+        f" {shown}, run `ccc init` there."
+    )
+
+
+def user_settings_root_note(root: Path, start: Path) -> str | None:
+    """Explain why a repo containing *start* resolves to the user settings root.
+
+    Such a project is usually left over from an older ccc that auto-initialized
+    ``$HOME``: every repo below it without settings of its own resolves to it.
+    Returns ``None`` unless *root* is the user settings root and *start* lies in
+    a repo below it.
+    """
+    if not is_user_settings_root(root):
+        return None
+    repo = find_parent_with_marker(start)
+    if repo is None or repo == root:
+        return None
+    shown_root = format_path_for_display(root)
+    shown_repo = format_path_for_display(repo)
+    return (
+        f"{shown_repo} has no ccc project of its own, so the project in use is"
+        f" {shown_root}, whose .cocoindex_code directory is also ccc's user settings"
+        f" directory. If {shown_root} is not meant to be a project, run"
+        f" `ccc reset --all` there, then `ccc init` in {shown_repo}."
+    )
+
+
 def find_project_root(start: Path) -> Path | None:
     """Walk up from *start* looking for ``.cocoindex_code/settings.yml``.
 

@@ -97,7 +97,7 @@ For [Grok](https://github.com/xai-org/grok) users, install via Grok's plugin sys
 | Component | Purpose |
 |-----------|---------|
 | **Skill** (`skills/ccc/`) | Agent runs `ccc search` / `ccc index` via the CLI (same as Claude Code above) |
-| **Hook** (`hooks/hooks.json`) | `SessionStart` + `PostToolUse` (Edit/Write/…) → incremental `ccc index` when `.cocoindex_code/` exists |
+| **Hook** (`hooks/hooks.json`) | `SessionStart` + `PostToolUse` (Edit/Write/…) → incremental `ccc index` when `.cocoindex_code/settings.yml` exists (never in the directory holding ccc's user settings, `~` by default) |
 | **MCP** (`.mcp.json`) | `ccc mcp` stdio server — `search` tool with `refresh_index=true` by default |
 
 Grok does **not** import Claude's `enabledPlugins` or plugin cache; install separately even if you already use cocoindex in Claude Code.
@@ -152,7 +152,7 @@ Then restart the session (`/reload-plugins` does not reload extensions). Require
 | Component | Purpose |
 |-----------|---------|
 | **Skill** (`skills/ccc/`) | Agent runs `ccc search` / `ccc index` via the CLI |
-| **Hook** (`extensions/ccc-index.ts` via `package.json#omp.extensions`) | `session_start` + post-edit `tool_result` → incremental `ccc index` when `.cocoindex_code/` exists |
+| **Hook** (`extensions/ccc-index.ts` via `package.json#omp.extensions`) | `session_start` + post-edit `tool_result` → incremental `ccc index` when `.cocoindex_code/settings.yml` exists (never in the directory holding ccc's user settings, `~` by default) |
 | **MCP** (`.mcp.json`) | `ccc mcp` stdio server |
 
 OMP does **not** execute Claude `hooks/hooks.json` command hooks. The TypeScript extension is the OMP equivalent of the Claude/Grok SessionStart + PostToolUse pair.
@@ -278,6 +278,8 @@ ccc search "authentication logic"       # search!
 The background daemon starts automatically on first use.
 
 > **Tip:** You can skip `ccc init` and go straight to `ccc index` — it auto-initializes new projects with default settings. If global settings are missing too (first use on the machine), it walks you through the same model setup as `ccc init` when run interactively; non-interactive runs (scripts, hooks) still require a one-time `ccc init` first.
+
+> **Note:** `ccc index` never auto-initializes the directory that holds ccc's user settings directory: your home directory by default (`~/.cocoindex_code` holds the global settings and daemon files), or the parent of `$COCOINDEX_CODE_DIR` when that directory is named `.cocoindex_code`. A project there would cover every repo below it. The editor hooks skip that directory even if it is already a project. If an older ccc made your home directory a project (`~/.cocoindex_code/settings.yml` exists), run `ccc reset --all` in your home directory: it removes that project's settings and indexes and keeps your global settings. To index your whole home directory on purpose, run `ccc init` there.
 
 ### CLI Reference
 

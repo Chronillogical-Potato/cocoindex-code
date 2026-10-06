@@ -3,13 +3,14 @@
  *   session_start              → incremental `ccc index` if the project is initialized
  *   tool_result after edits    → same (Edit/Write/MultiEdit/search_replace + OMP names)
  *
- * Fail-open: missing `ccc`, missing `.cocoindex_code/`, or a failed index never
- * throws into the session.
+ * Fail-open: missing `ccc`, an uninitialized project (no `.cocoindex_code/settings.yml`),
+ * or a failed index never throws into the session.
  */
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 const INDEX_TIMEOUT_MS = 60_000;
 
@@ -36,10 +37,43 @@ type ExtensionApi = {
   ) => void;
 };
 
+// ccc's user settings dir (global_settings.yml, daemon files). Auto-indexing never
+// runs in the directory that contains it: a project there covers every directory
+// below it, and is usually left over from an older ccc that auto-initialized $HOME.
+function userSettingsDir(): string {
+  return resolvedPath(
+    process.env.COCOINDEX_CODE_DIR || join(homedir(), ".cocoindex_code"),
+  );
+}
+
+// Like Python's Path.resolve(): follows symlinks, tolerates missing paths.
+function resolvedPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+// Mirrors ccc's find_project_root (`.cocoindex_code/settings.yml` marks a project),
+// except that it never returns the directory holding the user settings dir.
 function findInitializedRoot(cwd: string): string | null {
+  const userDir = userSettingsDir();
   let dir = cwd;
   for (let i = 0; i < 32; i++) {
-    if (existsSync(join(dir, ".cocoindex_code"))) {
+    const settingsDir = join(dir, ".cocoindex_code");
+    if (
+      isFile(join(settingsDir, "settings.yml")) &&
+      resolvedPath(settingsDir) !== userDir
+    ) {
       return dir;
     }
     const parent = dirname(dir);

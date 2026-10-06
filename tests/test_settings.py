@@ -31,6 +31,7 @@ from cocoindex_code.settings import (
     find_project_root,
     format_path_for_display,
     get_host_path_mappings,
+    is_user_settings_root,
     load_project_settings,
     load_user_settings,
     normalize_input_path,
@@ -232,6 +233,47 @@ def test_find_project_root_returns_none_when_not_initialized(tmp_path: Path) -> 
     standalone = tmp_path / "standalone"
     standalone.mkdir()
     assert find_project_root(standalone) is None
+
+
+def test_is_user_settings_root_follows_ccc_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``$HOME`` by default; the parent of ``COCOINDEX_CODE_DIR`` only when that dir
+    is named ``.cocoindex_code`` (the Docker layout); otherwise no directory."""
+    home = tmp_path / "home"
+    x = tmp_path / "x"
+    home.mkdir()
+    x.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("COCOINDEX_CODE_DIR", raising=False)
+    assert is_user_settings_root(home)
+    assert not is_user_settings_root(x)
+
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(x / ".cocoindex_code"))
+    assert is_user_settings_root(x)
+    assert not is_user_settings_root(home)
+
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(x / "ccc"))
+    assert not is_user_settings_root(x)
+    assert not is_user_settings_root(home)
+
+
+def test_is_user_settings_root_through_symlinked_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = tmp_path / "real_home"
+    (real / ".cocoindex_code").mkdir(parents=True)
+    link = tmp_path / "home"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    monkeypatch.setenv("HOME", str(link))
+    monkeypatch.setenv("USERPROFILE", str(link))
+    monkeypatch.delenv("COCOINDEX_CODE_DIR", raising=False)
+    assert is_user_settings_root(real)
+    assert is_user_settings_root(link)
 
 
 def test_find_parent_with_marker_finds_git(tmp_path: Path) -> None:

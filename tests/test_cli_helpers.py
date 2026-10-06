@@ -357,6 +357,176 @@ def test_version_works_outside_a_project(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 # ---------------------------------------------------------------------------
+# The user settings root is never made a project automatically
+# ---------------------------------------------------------------------------
+
+
+def _write_global_settings(user_dir: Path) -> None:
+    user_dir.mkdir(parents=True, exist_ok=True)
+    (user_dir / "global_settings.yml").write_text(
+        "embedding:\n  model: test\n  provider: litellm\n"
+    )
+
+
+@pytest.fixture()
+def fake_home_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A non-git HOME holding the user settings dir (default layout), cwd set to it."""
+    home = tmp_path / "home"
+    _write_global_settings(home / ".cocoindex_code")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("COCOINDEX_CODE_DIR", raising=False)
+    monkeypatch.chdir(home)
+    return home
+
+
+@pytest.fixture()
+def docker_like_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """``COCOINDEX_CODE_DIR=/x/.cocoindex_code`` with ``/x`` a git repo (Docker layout)."""
+    x = tmp_path / "workspace"
+    (x / ".git").mkdir(parents=True)
+    _write_global_settings(x / ".cocoindex_code")
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(x / ".cocoindex_code"))
+    monkeypatch.setenv("HOME", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "elsewhere"))
+    return x
+
+
+def _fail_if_indexing(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _no_daemon(_root: str) -> None:
+        raise AssertionError("ccc index reached the daemon")
+
+    monkeypatch.setattr(cli, "_run_index_with_progress", _no_daemon)
+
+
+def test_index_does_not_auto_init_user_settings_root(
+    fake_home_cli: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    _fail_if_indexing(monkeypatch)
+
+    result = CliRunner().invoke(cli.app, ["index"])
+
+    assert result.exit_code == 1
+    assert "user settings directory" in result.output
+    assert str(fake_home_cli) in result.output
+    assert not (fake_home_cli / ".cocoindex_code" / "settings.yml").exists()
+
+
+def test_index_does_not_auto_init_git_root_holding_user_settings_dir(
+    docker_like_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Auto-init anchors at the git root; that root is the user settings root here."""
+    from typer.testing import CliRunner
+
+    sub = docker_like_root / "src"
+    sub.mkdir()
+    monkeypatch.chdir(sub)
+    _fail_if_indexing(monkeypatch)
+
+    result = CliRunner().invoke(cli.app, ["index"])
+
+    assert result.exit_code == 1
+    assert str(docker_like_root) in result.output
+    assert str(sub) not in result.output
+    assert not (docker_like_root / ".cocoindex_code" / "settings.yml").exists()
+    assert not (sub / ".cocoindex_code").exists()
+
+
+def test_auto_init_refusal_comes_before_interactive_model_setup(
+    fake_home_cli: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First run on a machine, from $HOME, on a TTY: refuse before prompting for a model."""
+    from click.exceptions import Exit
+
+    (fake_home_cli / ".cocoindex_code" / "global_settings.yml").unlink()
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+    def _no_prompt(_model: str | None) -> None:
+        raise AssertionError("prompted for a model before refusing")
+
+    monkeypatch.setattr(cli, "_setup_user_settings_interactive", _no_prompt)
+
+    with pytest.raises(Exit):
+        require_project_root(auto_init=True)
+    assert not (fake_home_cli / ".cocoindex_code" / "settings.yml").exists()
+
+
+def test_init_initializes_user_settings_root_on_request(
+    docker_like_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit `ccc init` still works there (e.g. one repo mounted at /workspace)."""
+    from typer.testing import CliRunner
+
+    monkeypatch.chdir(docker_like_root)
+    result = CliRunner().invoke(cli.app, ["init"])
+
+    assert result.exit_code == 0, result.output
+    assert (docker_like_root / ".cocoindex_code" / "settings.yml").is_file()
+
+
+def test_repo_resolving_to_user_settings_root_gets_a_note(
+    fake_home_cli: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A HOME project left by an older auto-init captures every repo below it; say so."""
+    (fake_home_cli / ".cocoindex_code" / "settings.yml").write_text("include_patterns: []\n")
+    repo = fake_home_cli / "projects" / "app"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "src").mkdir()
+    monkeypatch.chdir(repo / "src")
+
+    assert require_project_root() == fake_home_cli
+
+    err = capsys.readouterr().err
+    assert f"Note: {repo} has no ccc project of its own" in err
+    assert "ccc reset --all" in err
+
+
+def test_project_at_user_settings_root_gets_no_note_from_its_own_repo(
+    docker_like_root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One repo mounted at /workspace and initialized there is not a capture."""
+    (docker_like_root / ".cocoindex_code" / "settings.yml").write_text("include_patterns: []\n")
+    (docker_like_root / "src").mkdir()
+    monkeypatch.chdir(docker_like_root / "src")
+
+    assert require_project_root() == docker_like_root
+    assert capsys.readouterr().err == ""
+
+
+def test_reset_all_at_user_settings_root_keeps_user_settings(
+    fake_home_cli: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cleanup path for a HOME project: its files go, global settings and daemon
+    files stay."""
+    from typer.testing import CliRunner
+
+    user_dir = fake_home_cli / ".cocoindex_code"
+    for name in ("settings.yml", "cocoindex.db", "target_sqlite.db", "daemon.log"):
+        (user_dir / name).write_text("x")
+    removed: list[str] = []
+    monkeypatch.setattr("cocoindex_code.client.remove_project", removed.append)
+
+    result = CliRunner().invoke(cli.app, ["reset", "--all", "-f"])
+
+    assert result.exit_code == 0, result.output
+    assert removed == [str(fake_home_cli)]
+    assert sorted(p.name for p in user_dir.iterdir()) == ["daemon.log", "global_settings.yml"]
+
+
+def test_index_auto_init_in_repo_below_user_settings_root_still_works(
+    fake_home_cli: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = fake_home_cli / "proj"
+    (project / ".git").mkdir(parents=True)
+    monkeypatch.chdir(project)
+
+    assert require_project_root(auto_init=True) == project
+    assert (project / ".cocoindex_code" / "settings.yml").is_file()
+
+
+# ---------------------------------------------------------------------------
 # ccc init — auto-populate indexing_params / query_params from curated table
 # ---------------------------------------------------------------------------
 

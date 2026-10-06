@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from mcp import Client
 
@@ -39,3 +41,59 @@ async def test_mcp_server_reports_own_version() -> None:
         assert client.server_info is not None
         assert client.server_info.name == "cocoindex-code"
         assert client.server_info.version == __version__
+
+
+def _repo_below_stale_home_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """cwd in a repo with no settings, below a $HOME an older ccc made a project."""
+    home = tmp_path / "home"
+    (home / ".cocoindex_code").mkdir(parents=True)
+    (home / ".cocoindex_code" / "settings.yml").write_text("include_patterns: []\n")
+    repo = home / "projects" / "app"
+    (repo / ".git").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("COCOINDEX_CODE_DIR", raising=False)
+    monkeypatch.chdir(repo)
+    return home
+
+
+async def test_search_from_repo_below_stale_home_project_carries_the_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MCP clients hide the server's stderr, so the note travels in the result."""
+    home = _repo_below_stale_home_project(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        daemon_client,
+        "search",
+        lambda **kwargs: SearchResponse(success=True, message="daemon message"),
+    )
+
+    async with Client(create_mcp_server(str(home)), raise_exceptions=True) as client:
+        result = await client.call_tool("search", {"query": "auth", "refresh_index": False})
+
+    assert result.structured_content is not None
+    message = result.structured_content["message"]
+    assert message.startswith("daemon message\nNote: ")
+    assert f"{home / 'projects' / 'app'} has no ccc project of its own" in message
+    assert "ccc reset --all" in message
+
+
+async def test_failed_search_below_stale_home_project_still_carries_the_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Indexing a whole home is what times out; the failure must still explain why."""
+    home = _repo_below_stale_home_project(tmp_path, monkeypatch)
+
+    def _timeout(_root: str) -> None:
+        raise TimeoutError("indexing took too long")
+
+    monkeypatch.setattr(daemon_client, "index", _timeout)
+
+    async with Client(create_mcp_server(str(home)), raise_exceptions=True) as client:
+        result = await client.call_tool("search", {"query": "auth"})
+
+    assert result.structured_content is not None
+    message = result.structured_content["message"]
+    assert result.structured_content["success"] is False
+    assert message.startswith("Query failed: indexing took too long\nNote: ")
+    assert "ccc reset --all" in message

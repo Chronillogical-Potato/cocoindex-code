@@ -139,3 +139,67 @@ def test_legacy_excluded_patterns_conversion(tmp_path: Path) -> None:
     # Should have defaults + extra
     assert "**/migration.sql" in loaded.exclude_patterns
     assert "**/.*" in loaded.exclude_patterns  # default
+
+
+def test_legacy_entry_does_not_auto_init_user_settings_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Started from $HOME, the legacy server exits with a message instead of making
+    $HOME a project (or dying with a traceback)."""
+    from cocoindex_code.server import main
+
+    home = tmp_path / "home"
+    (home / ".cocoindex_code").mkdir(parents=True)
+    (home / ".cocoindex_code" / "global_settings.yml").write_text(
+        "embedding:\n  model: test\n  provider: litellm\n"
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("COCOINDEX_CODE_DIR", raising=False)
+    monkeypatch.delenv("COCOINDEX_CODE_ROOT_PATH", raising=False)
+    monkeypatch.chdir(home)
+    monkeypatch.setattr("sys.argv", ["cocoindex-code", "index"])
+
+    def _no_daemon(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the legacy entry point reached the daemon")
+
+    monkeypatch.setattr("cocoindex_code.client.index", _no_daemon)
+
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert "user settings directory" in str(exc.value.code)
+    assert not (home / ".cocoindex_code" / "settings.yml").exists()
+
+
+def test_legacy_entry_honors_explicit_root_path_at_user_settings_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """COCOINDEX_CODE_ROOT_PATH=$HOME is a deliberate choice, like `ccc init`: the
+    legacy server initializes $HOME instead of refusing it."""
+    from cocoindex_code.protocol import IndexResponse
+    from cocoindex_code.server import main
+
+    home = tmp_path / "home"
+    (home / ".cocoindex_code").mkdir(parents=True)
+    (home / ".cocoindex_code" / "global_settings.yml").write_text(
+        "embedding:\n  model: test\n  provider: litellm\n"
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("COCOINDEX_CODE_DIR", raising=False)
+    monkeypatch.setenv("COCOINDEX_CODE_ROOT_PATH", str(home))
+    monkeypatch.chdir(home)
+    monkeypatch.setattr("sys.argv", ["cocoindex-code", "index"])
+    indexed: list[str] = []
+
+    def _index(root: str, **_kwargs: object) -> IndexResponse:
+        indexed.append(root)
+        return IndexResponse(success=False, message="stub")
+
+    monkeypatch.setattr("cocoindex_code.client.index", _index)
+
+    main()
+
+    assert (home / ".cocoindex_code" / "settings.yml").is_file()
+    assert indexed == [str(home.resolve())]

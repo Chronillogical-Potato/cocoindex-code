@@ -18,7 +18,7 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import BaseModel, Field
 
 from ._version import __version__
-from .settings import DaemonSettings, load_user_settings
+from .settings import DaemonSettings, load_user_settings, user_settings_root_note
 
 _MCP_INSTRUCTIONS = (
     "Code search and codebase understanding tools."
@@ -54,6 +54,13 @@ class SearchResultModel(BaseModel):
     total_returned: int = Field(default=0)
     offset: int = Field(default=0)
     message: str | None = None
+
+
+def _with_note(message: str | None, note: str | None) -> str | None:
+    """Append *note* to a result message; MCP clients hide the server's stderr."""
+    if note is None:
+        return message
+    return f"{message}\nNote: {note}" if message else f"Note: {note}"
 
 
 # === Daemon-backed MCP server factory ===
@@ -125,7 +132,9 @@ def create_mcp_server(project_root: str) -> MCPServer:
         from . import client as _client
 
         loop = asyncio.get_event_loop()
+        note: str | None = None
         try:
+            note = user_settings_root_note(Path(project_root), Path.cwd())
             if refresh_index:
                 await loop.run_in_executor(None, lambda: _client.index(project_root))
             resp = await loop.run_in_executor(
@@ -154,10 +163,12 @@ def create_mcp_server(project_root: str) -> MCPServer:
                 ],
                 total_returned=resp.total_returned,
                 offset=resp.offset,
-                message=resp.message,
+                message=_with_note(resp.message, note),
             )
         except Exception as e:
-            return SearchResultModel(success=False, message=f"Query failed: {e!s}")
+            return SearchResultModel(
+                success=False, message=_with_note(f"Query failed: {e!s}", note)
+            )
 
     return mcp
 
@@ -225,10 +236,12 @@ def main() -> None:
     Auto-detects/creates settings from env vars, then delegates to daemon.
     """
     import argparse
+    import sys
 
     from .settings import (
         EmbeddingSettings,
         LanguageOverride,
+        auto_init_refusal,
         default_project_settings,
         default_user_settings,
         find_legacy_project_root,
@@ -251,12 +264,14 @@ def main() -> None:
     # --- Discover project root ---
     cwd = Path.cwd()
     project_root = find_project_root(cwd)
+    root_from_env = False
 
     if project_root is None:
         # Try env var
         env_root = os.environ.get("COCOINDEX_CODE_ROOT_PATH")
         if env_root:
             project_root = Path(env_root).resolve()
+            root_from_env = True
         else:
             # Use marker-based discovery
             legacy_root = find_legacy_project_root(cwd)
@@ -265,6 +280,14 @@ def main() -> None:
     # --- Auto-create project settings if needed ---
     proj_settings_file = project_settings_path(project_root)
     if not proj_settings_file.is_file():
+        # COCOINDEX_CODE_ROOT_PATH is a deliberate choice, like `ccc init`: only a
+        # root found by discovery is refused.
+        refusal = None if root_from_env else auto_init_refusal(project_root)
+        if refusal is not None:
+            sys.exit(
+                f"Error: {refusal} To serve a project from here, set"
+                " COCOINDEX_CODE_ROOT_PATH to its directory."
+            )
         ps = default_project_settings()
 
         # Migrate COCOINDEX_CODE_EXCLUDED_PATTERNS
@@ -320,8 +343,6 @@ def main() -> None:
     from .protocol import IndexingProgress
 
     if args.command == "index":
-        import sys
-
         from rich.console import Console
         from rich.live import Live
         from rich.spinner import Spinner

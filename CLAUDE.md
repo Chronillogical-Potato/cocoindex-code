@@ -65,6 +65,8 @@ Two install flavors: `[full]` bundles `sentence-transformers` (local inference);
 
 `find_project_root()` walks up from CWD looking for `.cocoindex_code/settings.yml`. Global settings at `~/.cocoindex_code/global_settings.yml` (location overridable via `COCOINDEX_CODE_DIR`). The `COCOINDEX_CODE_DB_PATH_MAPPING` env var redirects database files to a different directory (used in Docker to avoid LMDB on bind mounts).
 
+`ccc index` and the legacy `cocoindex-code` entry point never auto-create project settings in the directory whose `.cocoindex_code` *is* the user settings dir (`is_user_settings_root()`: `$HOME` by default, `/x` for `COCOINDEX_CODE_DIR=/x/.cocoindex_code`), and the hooks and OMP extension never index it. With the documented Docker mount (`$HOME:/workspace`, `COCOINDEX_CODE_DIR=/workspace/.cocoindex_code`), `/workspace` is that directory. An explicit `ccc init` there is still allowed, for deliberate whole-tree indexing and single-repo mounts such as the Docker e2e fixture. `ccc reset` there removes only project files, never `global_settings.yml` or daemon files.
+
 
 ## Code Conventions
 
